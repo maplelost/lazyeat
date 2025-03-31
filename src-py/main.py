@@ -33,17 +33,11 @@ class Config:
 
 
 CONFIG = Config()
-
-cap = cv2.VideoCapture(CONFIG.camera_index)
-# 2025年3月26日，待测试 https://blog.csdn.net/laizi_laizi/article/details/130230282 稳定取图速度
-fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
-cap.set(cv2.CAP_PROP_FOURCC, fourcc)  # 优化帧率
+my_detector: MyDetector = None
 
 work_thread_lock = threading.Lock()
 work_thread: threading.Thread = None
 flag_work = False
-
-my_detector: 'MyDetector' = None
 
 
 @app.get("/")
@@ -72,8 +66,12 @@ def thread_init():
 
 
 def thread_detect():
+    thread_cam = cv2.VideoCapture(CONFIG.camera_index, cv2.CAP_DSHOW)
+    # cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # 优化帧率
+    thread_cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # 设置编码格式
+
     while True:
-        success, img = cap.read()
+        success, img = thread_cam.read()
 
         if my_detector is None:
             show_toast(
@@ -84,10 +82,6 @@ def thread_detect():
             continue
 
         if not flag_work:
-            try:
-                cv2.destroyAllWindows()
-            except:
-                pass
             break
 
         if not success:
@@ -95,22 +89,27 @@ def thread_detect():
 
         if CONFIG.show_detect_window:
             all_hands, img = my_detector.findHands(img, draw=True)
+            if all_hands:
+                my_detector.process(all_hands)
+                img = my_detector.draw_mouse_move_box(img)
+                cv2.imshow("Lazyeat Detect Window", img)
+                cv2.waitKey(1)
         else:
             all_hands = my_detector.findHands(img, draw=False)
+            if all_hands:
+                my_detector.process(all_hands)
+                # not CONFIG.show_detect_window 改变需要关闭窗口
+                try:
+                    cv2.destroyAllWindows()
+                except:
+                    pass
 
-        if all_hands:
-            state = my_detector.process(all_hands)
-
-        if CONFIG.show_detect_window:
-            img = my_detector.draw_mouse_move_box(img)
-            cv2.imshow("Lazyeat Detect Window", img)
-            cv2.waitKey(1)
-        else:
-            # CONFIG.show_detect_window 改变需要关闭窗口
-            try:
-                cv2.destroyAllWindows()
-            except:
-                pass
+    # 结束取图，释放资源
+    try:
+        thread_cam.release()
+        cv2.destroyAllWindows()
+    except:
+        pass
 
 
 @app.get("/toggle_work")
@@ -133,14 +132,10 @@ def toggle_work():
 def update_config(data: dict):
     from pinia_store import PINIA_STORE
 
-    global cap
     CONFIG.show_detect_window = data.get("show_window", False)
 
     camera_index = int(data.get("camera_index", 0))
     if camera_index != CONFIG.camera_index:
-        cap.release()
-        cap = cv2.VideoCapture(camera_index)
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # 优化帧率
         CONFIG.camera_index = camera_index
 
     # 更新四个手指同时竖起发送的按键
@@ -153,7 +148,6 @@ def update_config(data: dict):
 @app.get("/shutdown")
 def shutdown():
     try:
-        cap.release()
         cv2.destroyAllWindows()
     except:
         pass
